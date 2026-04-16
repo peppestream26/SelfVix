@@ -42,7 +42,7 @@ async function resolveAllMappings(kitsuId: string, episodeNum: string): Promise<
     }
 }
 
-// ── Step 2: Get episode number from mapping (handles absolute episode remapping) ──
+// ── Step 2: Get episode number from mapping ──
 async function resolveEpisodeFromMapping(kitsuId: string, episodeNum: string): Promise<number> {
     try {
         const ep = parseInt(episodeNum) || 1;
@@ -265,7 +265,7 @@ function ensureM3u8(url: string): string {
     } catch { return url; }
 }
 
-// ── Helpers ──
+// ── Helpers tipo audio ──
 function isIta(type: string): boolean {
     return type === 'ita' || type === 'it' || type === 'dub' || type === 'dubbed';
 }
@@ -282,65 +282,56 @@ export async function getVixCloudStreams(kitsuId: string, episodeNumber: string 
         const resolvedEp = await resolveEpisodeFromMapping(kitsuId, episodeNumber);
         const mappedPaths = await resolveAllMappings(kitsuId, episodeNumber);
 
-        // Separa i path per tipo
         let itaPath = mappedPaths.find(m => isIta(m.type));
         let jpPath  = mappedPaths.find(m => isJpSub(m.type));
 
-        // Se il mapping non distingue i tipi, prova a cercare tutti i path disponibili
         if (!itaPath && !jpPath && mappedPaths.length > 0) {
-            // Assegna il primo come jp e il secondo (se esiste) come ita
             jpPath  = mappedPaths[0];
             itaPath = mappedPaths[1];
         }
 
-        // ── Raccoglie embedUrl per entrambe le versioni ──
         let itaEmbed: string | null = null;
         let jpEmbed:  string | null = null;
 
         if (itaPath) itaEmbed = await getEmbedUrl(itaPath.path, resolvedEp);
         if (jpPath)  jpEmbed  = await getEmbedUrl(jpPath.path,  resolvedEp);
 
-        // ── Fallback: ricerca per titolo se mancano ancora ──
-        if (!itaEmbed && !jpEmbed) {
+        // ── Fallback search: scatta se manca ITA o JP (|| non &&) ──
+        if (!itaEmbed || !jpEmbed) {
             const title = await getKitsuTitle(kitsuId);
-            if (!title) {
-                console.log(`[VixCloud] Could not resolve title for kitsu:${kitsuId}`);
-                return [];
-            }
-            console.log(`[VixCloud] Searching AnimeUnity for title: "${title}"`);
-            
-            const session = await getAnimeUnitySession();
-            const searchResults = await searchAnimeUnity(title, session);
-            
-            if (searchResults.length === 0) {
-                console.log(`[VixCloud] No AnimeUnity results for "${title}"`);
-                return [];
-            }
+            if (title) {
+                console.log(`[VixCloud] Searching AnimeUnity for missing stream(s): "${title}"`);
+                const session = await getAnimeUnitySession();
+                const searchResults = await searchAnimeUnity(title, session);
 
-            // Cerca tra i risultati uno ITA e uno JP
-            const itaResult = searchResults.find((a: any) => isIta((a.type || '').toLowerCase()));
-            const jpResult  = searchResults.find((a: any) => isJpSub((a.type || '').toLowerCase()));
+                if (searchResults.length > 0) {
+                    const itaResult = searchResults.find((a: any) => isIta((a.type || '').toLowerCase()));
+                    const jpResult  = searchResults.find((a: any) => isJpSub((a.type || '').toLowerCase()));
 
-            // Fallback: se non ci sono distinzioni usa i primi due risultati
-            const firstResult  = searchResults[0];
-            const secondResult = searchResults[1];
+                    if (!itaEmbed && itaResult) {
+                        const path = `/anime/${itaResult.id}-${itaResult.slug}`;
+                        console.log(`[VixCloud] ITA from search: id=${itaResult.id} type=${itaResult.type}`);
+                        itaEmbed = await getEmbedUrl(path, resolvedEp);
+                    }
 
-            const itaAnime = itaResult || secondResult;
-            const jpAnime  = jpResult  || firstResult;
+                    if (!jpEmbed && jpResult) {
+                        const path = `/anime/${jpResult.id}-${jpResult.slug}`;
+                        console.log(`[VixCloud] JP from search: id=${jpResult.id} type=${jpResult.type}`);
+                        jpEmbed = await getEmbedUrl(path, resolvedEp);
+                    }
 
-            if (jpAnime) {
-                const path = `/anime/${jpAnime.id}-${jpAnime.slug}`;
-                console.log(`[VixCloud] JP candidate: id=${jpAnime.id} type=${jpAnime.type}`);
-                jpEmbed = await getEmbedUrl(path, resolvedEp);
-            }
-            if (itaAnime && itaAnime !== jpAnime) {
-                const path = `/anime/${itaAnime.id}-${itaAnime.slug}`;
-                console.log(`[VixCloud] ITA candidate: id=${itaAnime.id} type=${itaAnime.type}`);
-                itaEmbed = await getEmbedUrl(path, resolvedEp);
+                    // Ultimo fallback: se AnimeUnity non distingue i tipi usa i primi 2 risultati
+                    if (!jpEmbed && !itaEmbed) {
+                        const first  = searchResults[0];
+                        const second = searchResults[1];
+                        if (first)  jpEmbed  = await getEmbedUrl(`/anime/${first.id}-${first.slug}`, resolvedEp);
+                        if (second) itaEmbed = await getEmbedUrl(`/anime/${second.id}-${second.slug}`, resolvedEp);
+                    }
+                }
             }
         }
 
-        // ── Estrai manifest e costruisci stream ──
+        // ── Costruisci gli stream ──
         const streams: {name: string, title: string, url: string}[] = [];
 
         if (itaEmbed) {
