@@ -28,11 +28,18 @@ async function resolveAllMappings(kitsuId: string, episodeNum: string): Promise<
 
         for (const item of paths) {
             const path = typeof item === 'string' ? item : (item?.path || item?.url || item?.href || null);
-            const type = (typeof item === 'object' ? (item?.type || item?.audio || '') : '').toLowerCase();
-            if (path) {
-                results.push({ path, type });
-                console.log(`[VixCloud] Mapping found path: ${path} type: ${type || 'unknown'}`);
+            if (!path) continue;
+
+            // Prova prima il campo type/audio dall'API
+            let type = (typeof item === 'object' ? (item?.type || item?.audio || '') : '').toLowerCase();
+
+            // Se il tipo non è riconosciuto, deducilo dal slug (AnimeUnity usa sempre "-ita" per il doppiato)
+            if (!type || type === 'unknown') {
+                type = path.toLowerCase().includes('-ita') ? 'ita' : 'jp';
             }
+
+            results.push({ path, type });
+            console.log(`[VixCloud] Mapping found path: ${path} type: ${type}`);
         }
 
         return results;
@@ -41,7 +48,6 @@ async function resolveAllMappings(kitsuId: string, episodeNum: string): Promise<
         return [];
     }
 }
-
 // ── Step 2: Get episode number from mapping ──
 async function resolveEpisodeFromMapping(kitsuId: string, episodeNum: string): Promise<number> {
     try {
